@@ -5,6 +5,8 @@ import calendar
 import random
 import time
 import json
+from supabase import create_client, Client
+import uuid
 
 # Configuração da página
 st.set_page_config(
@@ -13,6 +15,25 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+
+try:
+    SUPABASE_URL = st.secrets["SUPABASE_URL"]
+    SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
+except KeyError:
+
+# Inicializar cliente Supabase
+@st.cache_resource
+def init_supabase():
+    try:
+        supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+        return supabase
+    except Exception as e:
+        st.error(f"❌ Erro ao conectar com Supabase: {str(e)}")
+        st.error("👆 Verifique suas credenciais no código!")
+        return None
+
+supabase = init_supabase()
 
 # CSS personalizado para visual reconfortante e funcional
 st.markdown("""
@@ -142,6 +163,24 @@ st.markdown("""
         font-weight: bold;
         margin: 0.5rem 0;
     }
+    
+    .connection-status {
+        background: linear-gradient(45deg, #4CAF50, #8BC34A);
+        color: white;
+        padding: 0.5rem 1rem;
+        border-radius: 20px;
+        font-size: 0.9rem;
+        margin: 0.5rem 0;
+    }
+    
+    .error-status {
+        background: linear-gradient(45deg, #FF5722, #FF8A65);
+        color: white;
+        padding: 0.5rem 1rem;
+        border-radius: 20px;
+        font-size: 0.9rem;
+        margin: 0.5rem 0;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -258,22 +297,233 @@ STUDY_TECHNIQUES = [
     }
 ]
 
+# Funções do banco de dados
+def get_user_id():
+    """Gera um ID único para o usuário"""
+    if 'user_id' not in st.session_state:
+        st.session_state.user_id = str(uuid.uuid4())
+    return st.session_state.user_id
+
+def load_subjects():
+    """Carrega matérias do banco"""
+    if not supabase:
+        return []
+    
+    try:
+        user_id = get_user_id()
+        result = supabase.table('subjects').select("*").eq('user_id', user_id).execute()
+        
+        subjects = []
+        for row in result.data:
+            # Converter review_dates de JSONB para dict com datetime
+            review_dates = {}
+            for key, date_str in row['review_dates'].items():
+                review_dates[key] = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
+            
+            subject = {
+                'id': row['id'],
+                'name': row['name'],
+                'notes': row['notes'],
+                'study_date': datetime.strptime(row['study_date'], '%Y-%m-%d').date(),
+                'difficulty': row['difficulty'],
+                'confidence': row['confidence'],
+                'study_method': row['study_method'],
+                'review_dates': review_dates,
+                'completed_reviews': row['completed_reviews'] or [],
+                'reset_count': row['reset_count'] or 0
+            }
+            subjects.append(subject)
+        
+        return subjects
+    except Exception as e:
+        st.error(f"Erro ao carregar matérias: {str(e)}")
+        return []
+
+def save_subject(subject):
+    """Salva uma matéria no banco"""
+    if not supabase:
+        return False
+    
+    try:
+        user_id = get_user_id()
+        
+        # Converter review_dates para formato JSON
+        review_dates_json = {}
+        for key, date_obj in subject['review_dates'].items():
+            if isinstance(date_obj, datetime):
+                review_dates_json[key] = date_obj.isoformat()
+            else:
+                review_dates_json[key] = date_obj
+        
+        data = {
+            'user_id': user_id,
+            'name': subject['name'],
+            'notes': subject['notes'],
+            'study_date': subject['study_date'].isoformat(),
+            'difficulty': subject['difficulty'],
+            'confidence': subject['confidence'],
+            'study_method': subject['study_method'],
+            'review_dates': review_dates_json,
+            'completed_reviews': subject['completed_reviews'],
+            'reset_count': subject['reset_count']
+        }
+        
+        if 'id' in subject:
+            # Atualizar matéria existente
+            result = supabase.table('subjects').update(data).eq('id', subject['id']).execute()
+        else:
+            # Criar nova matéria
+            result = supabase.table('subjects').insert(data).execute()
+            subject['id'] = result.data[0]['id']
+        
+        return True
+    except Exception as e:
+        st.error(f"Erro ao salvar matéria: {str(e)}")
+        return False
+
+def delete_subject(subject_id):
+    """Deleta uma matéria do banco"""
+    if not supabase:
+        return False
+    
+    try:
+        supabase.table('subjects').delete().eq('id', subject_id).execute()
+        return True
+    except Exception as e:
+        st.error(f"Erro ao deletar matéria: {str(e)}")
+        return False
+
+def load_habits():
+    """Carrega hábitos do banco"""
+    if not supabase:
+        return []
+    
+    try:
+        user_id = get_user_id()
+        result = supabase.table('habits').select("*").eq('user_id', user_id).execute()
+        
+        habits = []
+        for row in result.data:
+            # Converter completed_days de array para list de dates
+            completed_days = []
+            if row['completed_days']:
+                for date_str in row['completed_days']:
+                    completed_days.append(datetime.strptime(date_str, '%Y-%m-%d').date())
+            
+            habit = {
+                'id': row['id'],
+                'name': row['name'],
+                'trigger': row['trigger_text'],
+                'category': row['category'],
+                'difficulty': row['difficulty'],
+                'completed_days': completed_days,
+                'best_streak': row['best_streak'] or 0,
+                'created_date': datetime.strptime(row['created_date'], '%Y-%m-%d').date()
+            }
+            habits.append(habit)
+        
+        return habits
+    except Exception as e:
+        st.error(f"Erro ao carregar hábitos: {str(e)}")
+        return []
+
+def save_habit(habit):
+    """Salva um hábito no banco"""
+    if not supabase:
+        return False
+    
+    try:
+        user_id = get_user_id()
+        
+        # Converter completed_days para array de strings
+        completed_days_str = [date.isoformat() for date in habit['completed_days']]
+        
+        data = {
+            'user_id': user_id,
+            'name': habit['name'],
+            'trigger_text': habit.get('trigger', ''),
+            'category': habit['category'],
+            'difficulty': habit.get('difficulty', ''),
+            'completed_days': completed_days_str,
+            'best_streak': habit.get('best_streak', 0),
+            'created_date': habit['created_date'].isoformat()
+        }
+        
+        if 'id' in habit:
+            # Atualizar hábito existente
+            result = supabase.table('habits').update(data).eq('id', habit['id']).execute()
+        else:
+            # Criar novo hábito
+            result = supabase.table('habits').insert(data).execute()
+            habit['id'] = result.data[0]['id']
+        
+        return True
+    except Exception as e:
+        st.error(f"Erro ao salvar hábito: {str(e)}")
+        return False
+
+def delete_habit(habit_id):
+    """Deleta um hábito do banco"""
+    if not supabase:
+        return False
+    
+    try:
+        supabase.table('habits').delete().eq('id', habit_id).execute()
+        return True
+    except Exception as e:
+        st.error(f"Erro ao deletar hábito: {str(e)}")
+        return False
+
+def load_user_settings():
+    """Carrega configurações do usuário"""
+    if not supabase:
+        return {}
+    
+    try:
+        user_id = get_user_id()
+        result = supabase.table('user_settings').select("*").eq('user_id', user_id).execute()
+        
+        if result.data:
+            return result.data[0]
+        else:
+            # Criar configurações padrão
+            default_settings = {
+                'user_id': user_id,
+                'daily_quote': random.choice(MOTIVATIONAL_QUOTES),
+                'study_streak': 0,
+                'last_study_date': None,
+                'total_study_time': 0
+            }
+            
+            supabase.table('user_settings').insert(default_settings).execute()
+            return default_settings
+    except Exception as e:
+        st.error(f"Erro ao carregar configurações: {str(e)}")
+        return {}
+
+def save_user_settings(settings):
+    """Salva configurações do usuário"""
+    if not supabase:
+        return False
+    
+    try:
+        user_id = get_user_id()
+        result = supabase.table('user_settings').upsert(settings).eq('user_id', user_id).execute()
+        return True
+    except Exception as e:
+        st.error(f"Erro ao salvar configurações: {str(e)}")
+        return False
+
 # Inicialização do session_state
 def init_session_state():
     if 'subjects' not in st.session_state:
-        st.session_state.subjects = []
+        st.session_state.subjects = load_subjects()
     if 'habits' not in st.session_state:
-        st.session_state.habits = []
+        st.session_state.habits = load_habits()
+    if 'user_settings' not in st.session_state:
+        st.session_state.user_settings = load_user_settings()
     if 'daily_quote' not in st.session_state:
-        st.session_state.daily_quote = random.choice(MOTIVATIONAL_QUOTES)
-    if 'study_streak' not in st.session_state:
-        st.session_state.study_streak = 0
-    if 'last_study_date' not in st.session_state:
-        st.session_state.last_study_date = None
-    if 'total_study_time' not in st.session_state:
-        st.session_state.total_study_time = 0
-    if 'challenges_completed' not in st.session_state:
-        st.session_state.challenges_completed = []
+        st.session_state.daily_quote = st.session_state.user_settings.get('daily_quote', random.choice(MOTIVATIONAL_QUOTES))
     if 'pomodoro_timer' not in st.session_state:
         st.session_state.pomodoro_timer = 0
     if 'timer_active' not in st.session_state:
@@ -406,6 +656,21 @@ def create_weekly_calendar(subjects):
 def main():
     init_session_state()
     
+    # Status da conexão
+    if supabase:
+        st.markdown("""
+        <div class="connection-status">
+            ✅ Conectado ao banco de dados - Seus dados estão seguros!
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        st.markdown("""
+        <div class="error-status">
+            ❌ Erro de conexão - Configure suas credenciais do Supabase no código!
+        </div>
+        """, unsafe_allow_html=True)
+        st.stop()
+    
     # Header principal
     st.markdown("""
     <div style="text-align: center; padding: 2rem 0;">
@@ -444,6 +709,11 @@ def main():
         st.metric("Hábitos Ativos", len(st.session_state.habits))
         st.metric("Sequência de Estudos", f"{streak} dias")
         
+        # ID do usuário (para debug)
+        st.markdown("---")
+        st.markdown(f"**🆔 Seu ID:** `{get_user_id()[:8]}...`")
+        st.caption("Seus dados ficam salvos com este ID único")
+        
         # Badges de conquistas
         st.markdown("### 🏆 Conquistas")
         if streak >= 3:
@@ -455,6 +725,10 @@ def main():
         
         if st.button("🔄 Nova Frase Motivacional"):
             st.session_state.daily_quote = random.choice(MOTIVATIONAL_QUOTES)
+            # Salvar nova frase no banco
+            settings = st.session_state.user_settings.copy()
+            settings['daily_quote'] = st.session_state.daily_quote
+            save_user_settings(settings)
             st.rerun()
     
     # Dashboard Principal
@@ -639,7 +913,58 @@ def main():
                     if "Palácio" in technique['name']:
                         practice = st.text_input("Liste 5 cômodos da sua casa:", key=f"practice_{technique['name']}")
                         if practice:
-                            st.success("Perfeito! Agora imagine colocando uma informação importante em cada cômodo!")
+                            st.success("✅ Feito!")
+                    
+                    with col3:
+                        if today in habit['completed_days']:
+                            if st.button(f"↩️ Desfazer", key=f"undo_habit_{i}"):
+                                habit['completed_days'].remove(today)
+                                if save_habit(habit):
+                                    st.info("Desfeito! Não se preocupe, todos temos dias difíceis.")
+                                st.rerun()
+                    
+                    with col4:
+                        if st.button(f"🗑️ Remover", key=f"delete_habit_{i}"):
+                            if delete_habit(habit['id']):
+                                st.session_state.habits.pop(i)
+                                st.success("Hábito removido do banco de dados!")
+                            st.rerun()
+                    
+                    # Dicas baseadas no progresso
+                    if current_streak == 0 and len(habit['completed_days']) > 0:
+                        st.warning("💡 **Dica:** Quebrou o streak? Normal! O importante é recomeçar hoje. Progressão não é perfeição!")
+                    elif current_streak >= 21:
+                        st.success("🏆 **Parabéns!** Cientificamente, você já formou este hábito! Agora é automático!")
+        
+        else:
+            st.info("🎯 Você ainda não tem hábitos cadastrados. Adicione um acima!")
+            
+            # Sugestões de hábitos
+            st.markdown("""
+            <div class="procrastination-killer">
+                <h4>💡 Sugestões de Hábitos Poderosos:</h4>
+                <ul>
+                    <li>📚 <strong>Estudar 25 min todo dia às 19h</strong> (depois do jantar)</li>
+                    <li>🧠 <strong>Revisar flashcards 10 min no transporte</strong></li>
+                    <li>📝 <strong>Escrever 3 coisas que aprendi hoje</strong> (antes de dormir)</li>
+                    <li>🏃 <strong>Caminhar 15 min</strong> (depois do almoço)</li>
+                    <li>🧘 <strong>Meditar 5 min</strong> (logo ao acordar)</li>
+                </ul>
+            </div>
+            """, unsafe_allow_html=True)
+    
+    # Footer
+    st.markdown("---")
+    st.markdown("""
+    <div style="text-align: center; color: #42A5F5; font-style: italic;">
+        💙 StudyFlow Pro - Transformando procrastinação em conquistas diárias
+        <br>🧠 "A diferença entre o ordinário e o extraordinário é a prática deliberada"
+        <br>🔒 Seus dados ficam salvos permanentemente no Supabase
+    </div>
+    """, unsafe_allow_html=True)
+
+if __name__ == "__main__":
+    main()("Perfeito! Agora imagine colocando uma informação importante em cada cômodo!")
                     
                     elif "Associação" in technique['name']:
                         practice = st.text_input("Digite algo que quer memorizar:", key=f"practice_{technique['name']}")
@@ -698,12 +1023,12 @@ def main():
             with col1:
                 subject_name = st.text_input(
                     "Nome da Matéria:",
-                    placeholder="Ex: Matemática - Derivadas"
+                    placeholder="Ex: Eletrônica - Transistor BJT"
                 )
                 
                 subject_notes = st.text_area(
                     "Resumo do que estudou (use técnicas de elaboração!):",
-                    placeholder="Não apenas 'estudei derivadas'. Escreva: 'Aprendi que derivadas medem taxa de variação, como velocidade é derivada da posição. Pratiquei regra da cadeia em funções compostas.'",
+                    placeholder="Ex: Aprendi que transistores BJT têm 3 terminais (base, coletor, emissor). Base controla corrente entre coletor-emissor. Tipo NPN conduz quando base positiva. Pratiquei cálculo de ganho beta.",
                     height=120
                 )
                 
@@ -747,19 +1072,24 @@ def main():
                     'reset_count': 0
                 }
                 
-                st.session_state.subjects.append(new_subject)
-                
-                st.markdown("""
-                <div class="success-message">
-                    ✅ Matéria adicionada com sucesso! As datas de revisão foram calculadas automaticamente.
-                    🧠 Lembre-se: A revisão espaçada é uma das técnicas mais poderosas para memória de longo prazo!
-                </div>
-                """, unsafe_allow_html=True)
-                
-                st.balloons()
-                
-                # Sugestão de próxima ação
-                st.info("💡 **Próximo passo:** Que tal usar a técnica do Palácio da Memória para fixar melhor o que acabou de estudar?")
+                # Salvar no banco
+                if save_subject(new_subject):
+                    st.session_state.subjects.append(new_subject)
+                    
+                    st.markdown("""
+                    <div class="success-message">
+                        ✅ Matéria salva permanentemente no banco de dados!
+                        🧠 As datas de revisão foram calculadas automaticamente.
+                        🔄 Agora seus dados ficam salvos para sempre!
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                    st.balloons()
+                    
+                    # Sugestão de próxima ação
+                    st.info("💡 **Próximo passo:** Que tal usar a técnica do Palácio da Memória para fixar melhor o que acabou de estudar?")
+                else:
+                    st.error("❌ Erro ao salvar no banco de dados!")
     
     # Página: Minhas Matérias
     elif page == "📚 Minhas Matérias":
@@ -842,15 +1172,17 @@ def main():
                                 if phase not in subject['completed_reviews'] and date <= today:
                                     subject['completed_reviews'].append(phase)
                                     
-                                    # Mensagens motivacionais baseadas na fase
-                                    messages = {
-                                        'hoje': "🎉 Primeira revisão concluída! Você está construindo memória sólida!",
-                                        '3_dias': "💪 Segunda revisão! O conhecimento está se fixando!",
-                                        '1_semana': "🚀 Terceira revisão! Você está dominando este conteúdo!",
-                                        '1_mes': "🏆 Revisão final! Este conhecimento agora é seu para sempre!"
-                                    }
-                                    
-                                    st.success(messages.get(phase, "Revisão concluída!"))
+                                    # Salvar no banco
+                                    if save_subject(subject):
+                                        # Mensagens motivacionais baseadas na fase
+                                        messages = {
+                                            'hoje': "🎉 Primeira revisão concluída! Você está construindo memória sólida!",
+                                            '3_dias': "💪 Segunda revisão! O conhecimento está se fixando!",
+                                            '1_semana': "🚀 Terceira revisão! Você está dominando este conteúdo!",
+                                            '1_mes': "🏆 Revisão final! Este conhecimento agora é seu para sempre!"
+                                        }
+                                        
+                                        st.success(messages.get(phase, "Revisão concluída!"))
                                     break
                             st.rerun()
                     
@@ -861,20 +1193,24 @@ def main():
                             subject['completed_reviews'] = []
                             subject['reset_count'] += 1
                             
-                            encouragements = [
-                                "💪 Não desanime! Grandes mentes também precisam de múltiplas revisões!",
-                                "🌱 Cada reinício é um novo crescimento! Você está evoluindo!",
-                                "🎯 A persistência é o que separa o bom do excelente!",
-                                "🧠 Einstein disse: 'Não é que sou muito inteligente, é que fico mais tempo com os problemas!'",
-                                "🔥 Você não está falhando, está aprendendo como aprender melhor!"
-                            ]
-                            
-                            st.info(random.choice(encouragements))
+                            # Salvar no banco
+                            if save_subject(subject):
+                                encouragements = [
+                                    "💪 Não desanime! Grandes mentes também precisam de múltiplas revisões!",
+                                    "🌱 Cada reinício é um novo crescimento! Você está evoluindo!",
+                                    "🎯 A persistência é o que separa o bom do excelente!",
+                                    "🧠 Einstein disse: 'Não é que sou muito inteligente, é que fico mais tempo com os problemas!'",
+                                    "🔥 Você não está falhando, está aprendendo como aprender melhor!"
+                                ]
+                                
+                                st.info(random.choice(encouragements))
                             st.rerun()
                     
                     with col5:
                         if st.button(f"🗑️ Remover", key=f"delete_{i}"):
-                            st.session_state.subjects.pop(i)
+                            if delete_subject(subject['id']):
+                                st.session_state.subjects.pop(i)
+                                st.success("Matéria removida do banco de dados!")
                             st.rerun()
         else:
             st.info("🎯 Você ainda não adicionou nenhuma matéria. Comece adicionando uma na seção 'Adicionar Matéria'!")
@@ -958,8 +1294,10 @@ def main():
                         'best_streak': 0
                     }
                     
-                    st.session_state.habits.append(new_habit)
-                    st.success("🎉 Hábito adicionado! Lembre-se: consistência é mais importante que perfeição!")
+                    # Salvar no banco
+                    if save_habit(new_habit):
+                        st.session_state.habits.append(new_habit)
+                        st.success("🎉 Hábito salvo permanentemente! Lembre-se: consistência é mais importante que perfeição!")
                     st.rerun()
         
         # Lista de hábitos
@@ -979,6 +1317,7 @@ def main():
                 # Atualizar melhor streak
                 if current_streak > habit.get('best_streak', 0):
                     habit['best_streak'] = current_streak
+                    save_habit(habit)  # Salvar no banco
                 
                 streak_emoji = "🔥" if current_streak >= 7 else "⭐" if current_streak >= 3 else "🌱"
                 
@@ -1012,65 +1351,21 @@ def main():
                             if st.button(f"✅ Feito!", key=f"complete_habit_{i}"):
                                 habit['completed_days'].append(today)
                                 
-                                # Mensagens motivacionais baseadas no streak
-                                if current_streak + 1 == 1:
-                                    st.success("🎉 Primeiro dia! Todo grande hábito começa com um passo!")
-                                elif current_streak + 1 == 3:
-                                    st.success("⭐ 3 dias seguidos! O hábito está se formando!")
-                                elif current_streak + 1 == 7:
-                                    st.success("🔥 Uma semana! Você está pegando fogo!")
-                                elif current_streak + 1 == 30:
-                                    st.success("🚀 Um mês! Esse hábito agora é parte de quem você é!")
-                                else:
-                                    st.success(f"💪 Mais um dia conquistado! Streak: {current_streak + 1}")
+                                # Salvar no banco
+                                if save_habit(habit):
+                                    # Mensagens motivacionais baseadas no streak
+                                    if current_streak + 1 == 1:
+                                        st.success("🎉 Primeiro dia! Todo grande hábito começa com um passo!")
+                                    elif current_streak + 1 == 3:
+                                        st.success("⭐ 3 dias seguidos! O hábito está se formando!")
+                                    elif current_streak + 1 == 7:
+                                        st.success("🔥 Uma semana! Você está pegando fogo!")
+                                    elif current_streak + 1 == 30:
+                                        st.success("🚀 Um mês! Esse hábito agora é parte de quem você é!")
+                                    else:
+                                        st.success(f"💪 Mais um dia conquistado! Streak: {current_streak + 1}")
                                 
                                 st.rerun()
                         else:
-                            st.success("✅ Feito!")
-                    
-                    with col3:
-                        if today in habit['completed_days']:
-                            if st.button(f"↩️ Desfazer", key=f"undo_habit_{i}"):
-                                habit['completed_days'].remove(today)
-                                st.info("Desfeito! Não se preocupe, todos temos dias difíceis.")
-                                st.rerun()
-                    
-                    with col4:
-                        if st.button(f"🗑️ Remover", key=f"delete_habit_{i}"):
-                            st.session_state.habits.pop(i)
-                            st.rerun()
-                    
-                    # Dicas baseadas no progresso
-                    if current_streak == 0 and len(habit['completed_days']) > 0:
-                        st.warning("💡 **Dica:** Quebrou o streak? Normal! O importante é recomeçar hoje. Progressão não é perfeição!")
-                    elif current_streak >= 21:
-                        st.success("🏆 **Parabéns!** Cientificamente, você já formou este hábito! Agora é automático!")
-        
-        else:
-            st.info("🎯 Você ainda não tem hábitos cadastrados. Adicione um acima!")
-            
-            # Sugestões de hábitos
-            st.markdown("""
-            <div class="procrastination-killer">
-                <h4>💡 Sugestões de Hábitos Poderosos:</h4>
-                <ul>
-                    <li>📚 <strong>Estudar 25 min todo dia às 19h</strong> (depois do jantar)</li>
-                    <li>🧠 <strong>Revisar flashcards 10 min no transporte</strong></li>
-                    <li>📝 <strong>Escrever 3 coisas que aprendi hoje</strong> (antes de dormir)</li>
-                    <li>🏃 <strong>Caminhar 15 min</strong> (depois do almoço)</li>
-                    <li>🧘 <strong>Meditar 5 min</strong> (logo ao acordar)</li>
-                </ul>
-            </div>
-            """, unsafe_allow_html=True)
-    
-    # Footer
-    st.markdown("---")
-    st.markdown("""
-    <div style="text-align: center; color: #42A5F5; font-style: italic;">
-        💙 StudyFlow Pro - Transformando procrastinação em conquistas diárias
-        <br>🧠 "A diferença entre o ordinário e o extraordinário é a prática deliberada"
-    </div>
-    """, unsafe_allow_html=True)
-
-if __name__ == "__main__":
+                            st.success
     main()
