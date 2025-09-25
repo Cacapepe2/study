@@ -5,8 +5,8 @@ import calendar
 import random
 import time
 import json
+import re
 from supabase import create_client, Client
-import uuid
 
 # Configuração da página
 st.set_page_config(
@@ -16,11 +16,30 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-
 try:
     SUPABASE_URL = st.secrets["SUPABASE_URL"]
     SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 except KeyError:
+    st.error("""
+    🚨 **CONFIGURAÇÃO NECESSÁRIA**
+    
+    Para funcionar, você precisa configurar as credenciais do Supabase:
+    
+    **No Streamlit Community Cloud:**
+    1. Vá em Settings → Secrets
+    2. Adicione:
+    ```
+    [secrets]
+    SUPABASE_URL = "sua_url_aqui"
+    SUPABASE_KEY = "sua_chave_aqui"
+    ```
+    
+    **Para testar localmente:**
+    1. Crie arquivo `.streamlit/secrets.toml` 
+    2. Adicione o mesmo conteúdo acima
+    3. Adicione `.streamlit/` no .gitignore
+    """)
+    st.stop()
 
 # Inicializar cliente Supabase
 @st.cache_resource
@@ -30,7 +49,7 @@ def init_supabase():
         return supabase
     except Exception as e:
         st.error(f"❌ Erro ao conectar com Supabase: {str(e)}")
-        st.error("👆 Verifique suas credenciais no código!")
+        st.error("👆 Verifique suas credenciais!")
         return None
 
 supabase = init_supabase()
@@ -108,6 +127,15 @@ st.markdown("""
         border-radius: 12px;
         border-left: 4px solid #9C27B0;
         margin: 0.5rem 0;
+    }
+    
+    .login-card {
+        background: linear-gradient(45deg, #E3F2FD, #F8FBFF);
+        padding: 2rem;
+        border-radius: 20px;
+        border: 3px solid #42A5F5;
+        margin: 2rem 0;
+        text-align: center;
     }
     
     .calendar-day {
@@ -297,13 +325,73 @@ STUDY_TECHNIQUES = [
     }
 ]
 
-# Funções do banco de dados
-def get_user_id():
-    """Gera um ID único para o usuário"""
-    if 'user_id' not in st.session_state:
-        st.session_state.user_id = str(uuid.uuid4())
-    return st.session_state.user_id
+# Sistema de Login com Código Pessoal
+def show_login():
+    """Exibe tela de login com código pessoal"""
+    st.markdown("""
+    <div style="text-align: center; padding: 2rem 0;">
+        <h1 style="color: #1565C0; font-size: 3rem; margin-bottom: 0.5rem;">🔐 StudyFlow Pro</h1>
+        <h3 style="color: #42A5F5; font-weight: 300;">Entre com seu código pessoal</h3>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    st.markdown("""
+    <div class="procrastination-killer">
+        <h4>🎯 Como funciona:</h4>
+        <ul>
+            <li><strong>Primeira vez?</strong> Crie um código único (ex: joao2025, maria_estudos)</li>
+            <li><strong>Já tem conta?</strong> Digite seu código para acessar seus dados</li>
+            <li><strong>Funciona em qualquer dispositivo!</strong> Basta lembrar do código</li>
+        </ul>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    col1, col2, col3 = st.columns([1, 2, 1])
+    
+    with col2:
+        st.markdown('<div class="login-card">', unsafe_allow_html=True)
+        
+        access_code = st.text_input(
+            "🔑 Seu Código Pessoal:",
+            placeholder="Ex: joao2025, maria_estudos",
+            help="Use letras, números e _ (sem espaços). Mínimo 4 caracteres.",
+            max_chars=50,
+            key="login_code"
+        )
+        
+        if st.button("🚀 Entrar / Criar Conta", use_container_width=True):
+            if access_code and len(access_code) >= 4:
+                # Validar código (só letras, números e _)
+                if re.match("^[a-zA-Z0-9_]+$", access_code):
+                    st.session_state.user_id = access_code.lower()
+                    st.session_state.logged_in = True
+                    st.success(f"✅ Bem-vindo(a), {access_code}!")
+                    time.sleep(1)
+                    st.rerun()
+                else:
+                    st.error("❌ Use apenas letras, números e _ (sem espaços)")
+            else:
+                st.error("❌ Código deve ter pelo menos 4 caracteres")
+        
+        st.markdown('</div>', unsafe_allow_html=True)
+    
+    # Dicas de segurança
+    st.markdown("""
+    <div class="technique-card">
+        <h4>💡 Dicas para um bom código:</h4>
+        <ul>
+            <li><strong>Fácil de lembrar:</strong> seu_nome2025, joao_estudos</li>
+            <li><strong>Único:</strong> não use códigos óbvios como "1234"</li>
+            <li><strong>Anote em local seguro:</strong> se esquecer, perde os dados!</li>
+        </ul>
+    </div>
+    """, unsafe_allow_html=True)
 
+def get_user_id():
+    """Obtém ID do usuário via código pessoal"""
+    return st.session_state.get('user_id', None)
+
+# Funções do banco de dados
 def load_subjects():
     """Carrega matérias do banco"""
     if not supabase:
@@ -311,6 +399,9 @@ def load_subjects():
     
     try:
         user_id = get_user_id()
+        if not user_id:
+            return []
+            
         result = supabase.table('subjects').select("*").eq('user_id', user_id).execute()
         
         subjects = []
@@ -346,6 +437,8 @@ def save_subject(subject):
     
     try:
         user_id = get_user_id()
+        if not user_id:
+            return False
         
         # Converter review_dates para formato JSON
         review_dates_json = {}
@@ -400,6 +493,9 @@ def load_habits():
     
     try:
         user_id = get_user_id()
+        if not user_id:
+            return []
+            
         result = supabase.table('habits').select("*").eq('user_id', user_id).execute()
         
         habits = []
@@ -434,6 +530,8 @@ def save_habit(habit):
     
     try:
         user_id = get_user_id()
+        if not user_id:
+            return False
         
         # Converter completed_days para array de strings
         completed_days_str = [date.isoformat() for date in habit['completed_days']]
@@ -481,6 +579,9 @@ def load_user_settings():
     
     try:
         user_id = get_user_id()
+        if not user_id:
+            return {}
+            
         result = supabase.table('user_settings').select("*").eq('user_id', user_id).execute()
         
         if result.data:
@@ -508,6 +609,9 @@ def save_user_settings(settings):
     
     try:
         user_id = get_user_id()
+        if not user_id:
+            return False
+            
         result = supabase.table('user_settings').upsert(settings).eq('user_id', user_id).execute()
         return True
     except Exception as e:
@@ -516,18 +620,30 @@ def save_user_settings(settings):
 
 # Inicialização do session_state
 def init_session_state():
+    if 'logged_in' not in st.session_state:
+        st.session_state.logged_in = False
+    if 'user_id' not in st.session_state:
+        st.session_state.user_id = None
     if 'subjects' not in st.session_state:
-        st.session_state.subjects = load_subjects()
+        st.session_state.subjects = []
     if 'habits' not in st.session_state:
-        st.session_state.habits = load_habits()
+        st.session_state.habits = []
     if 'user_settings' not in st.session_state:
-        st.session_state.user_settings = load_user_settings()
+        st.session_state.user_settings = {}
     if 'daily_quote' not in st.session_state:
-        st.session_state.daily_quote = st.session_state.user_settings.get('daily_quote', random.choice(MOTIVATIONAL_QUOTES))
+        st.session_state.daily_quote = random.choice(MOTIVATIONAL_QUOTES)
     if 'pomodoro_timer' not in st.session_state:
         st.session_state.pomodoro_timer = 0
     if 'timer_active' not in st.session_state:
         st.session_state.timer_active = False
+
+# Carregar dados do usuário logado
+def load_user_data():
+    if st.session_state.logged_in and get_user_id():
+        st.session_state.subjects = load_subjects()
+        st.session_state.habits = load_habits()
+        st.session_state.user_settings = load_user_settings()
+        st.session_state.daily_quote = st.session_state.user_settings.get('daily_quote', random.choice(MOTIVATIONAL_QUOTES))
 
 # Função para calcular streak de estudos
 def calculate_study_streak():
@@ -656,6 +772,15 @@ def create_weekly_calendar(subjects):
 def main():
     init_session_state()
     
+    # Verificar se usuário está logado
+    if not st.session_state.get('logged_in', False):
+        show_login()
+        return
+    
+    # Carregar dados do usuário
+    if not st.session_state.subjects and not st.session_state.habits:
+        load_user_data()
+    
     # Status da conexão
     if supabase:
         st.markdown("""
@@ -666,7 +791,7 @@ def main():
     else:
         st.markdown("""
         <div class="error-status">
-            ❌ Erro de conexão - Configure suas credenciais do Supabase no código!
+            ❌ Erro de conexão - Configure suas credenciais do Supabase!
         </div>
         """, unsafe_allow_html=True)
         st.stop()
@@ -709,10 +834,17 @@ def main():
         st.metric("Hábitos Ativos", len(st.session_state.habits))
         st.metric("Sequência de Estudos", f"{streak} dias")
         
-        # ID do usuário (para debug)
+        # Informações do usuário
         st.markdown("---")
-        st.markdown(f"**🆔 Seu ID:** `{get_user_id()[:8]}...`")
-        st.caption("Seus dados ficam salvos com este ID único")
+        st.markdown(f"**👤 Logado como:** `{get_user_id()}`")
+        st.caption("Seus dados ficam salvos com este código")
+        
+        if st.button("🚪 Trocar Conta"):
+            st.session_state.logged_in = False
+            st.session_state.user_id = None
+            st.session_state.subjects = []
+            st.session_state.habits = []
+            st.rerun()
         
         # Badges de conquistas
         st.markdown("### 🏆 Conquistas")
@@ -913,58 +1045,7 @@ def main():
                     if "Palácio" in technique['name']:
                         practice = st.text_input("Liste 5 cômodos da sua casa:", key=f"practice_{technique['name']}")
                         if practice:
-                            st.success("✅ Feito!")
-                    
-                    with col3:
-                        if today in habit['completed_days']:
-                            if st.button(f"↩️ Desfazer", key=f"undo_habit_{i}"):
-                                habit['completed_days'].remove(today)
-                                if save_habit(habit):
-                                    st.info("Desfeito! Não se preocupe, todos temos dias difíceis.")
-                                st.rerun()
-                    
-                    with col4:
-                        if st.button(f"🗑️ Remover", key=f"delete_habit_{i}"):
-                            if delete_habit(habit['id']):
-                                st.session_state.habits.pop(i)
-                                st.success("Hábito removido do banco de dados!")
-                            st.rerun()
-                    
-                    # Dicas baseadas no progresso
-                    if current_streak == 0 and len(habit['completed_days']) > 0:
-                        st.warning("💡 **Dica:** Quebrou o streak? Normal! O importante é recomeçar hoje. Progressão não é perfeição!")
-                    elif current_streak >= 21:
-                        st.success("🏆 **Parabéns!** Cientificamente, você já formou este hábito! Agora é automático!")
-        
-        else:
-            st.info("🎯 Você ainda não tem hábitos cadastrados. Adicione um acima!")
-            
-            # Sugestões de hábitos
-            st.markdown("""
-            <div class="procrastination-killer">
-                <h4>💡 Sugestões de Hábitos Poderosos:</h4>
-                <ul>
-                    <li>📚 <strong>Estudar 25 min todo dia às 19h</strong> (depois do jantar)</li>
-                    <li>🧠 <strong>Revisar flashcards 10 min no transporte</strong></li>
-                    <li>📝 <strong>Escrever 3 coisas que aprendi hoje</strong> (antes de dormir)</li>
-                    <li>🏃 <strong>Caminhar 15 min</strong> (depois do almoço)</li>
-                    <li>🧘 <strong>Meditar 5 min</strong> (logo ao acordar)</li>
-                </ul>
-            </div>
-            """, unsafe_allow_html=True)
-    
-    # Footer
-    st.markdown("---")
-    st.markdown("""
-    <div style="text-align: center; color: #42A5F5; font-style: italic;">
-        💙 StudyFlow Pro - Transformando procrastinação em conquistas diárias
-        <br>🧠 "A diferença entre o ordinário e o extraordinário é a prática deliberada"
-        <br>🔒 Seus dados ficam salvos permanentemente no Supabase
-    </div>
-    """, unsafe_allow_html=True)
-
-if __name__ == "__main__":
-    main()("Perfeito! Agora imagine colocando uma informação importante em cada cômodo!")
+                            st.success("Perfeito! Agora imagine colocando uma informação importante em cada cômodo!")
                     
                     elif "Associação" in technique['name']:
                         practice = st.text_input("Digite algo que quer memorizar:", key=f"practice_{technique['name']}")
@@ -1367,5 +1448,56 @@ if __name__ == "__main__":
                                 
                                 st.rerun()
                         else:
-                            st.success
+                            st.success("✅ Feito!")
+                    
+                    with col3:
+                        if today in habit['completed_days']:
+                            if st.button(f"↩️ Desfazer", key=f"undo_habit_{i}"):
+                                habit['completed_days'].remove(today)
+                                if save_habit(habit):
+                                    st.info("Desfeito! Não se preocupe, todos temos dias difíceis.")
+                                st.rerun()
+                    
+                    with col4:
+                        if st.button(f"🗑️ Remover", key=f"delete_habit_{i}"):
+                            if delete_habit(habit['id']):
+                                st.session_state.habits.pop(i)
+                                st.success("Hábito removido do banco de dados!")
+                            st.rerun()
+                    
+                    # Dicas baseadas no progresso
+                    if current_streak == 0 and len(habit['completed_days']) > 0:
+                        st.warning("💡 **Dica:** Quebrou o streak? Normal! O importante é recomeçar hoje. Progressão não é perfeição!")
+                    elif current_streak >= 21:
+                        st.success("🏆 **Parabéns!** Cientificamente, você já formou este hábito! Agora é automático!")
+        
+        else:
+            st.info("🎯 Você ainda não tem hábitos cadastrados. Adicione um acima!")
+            
+            # Sugestões de hábitos
+            st.markdown("""
+            <div class="procrastination-killer">
+                <h4>💡 Sugestões de Hábitos Poderosos:</h4>
+                <ul>
+                    <li>📚 <strong>Estudar 25 min todo dia às 19h</strong> (depois do jantar)</li>
+                    <li>🧠 <strong>Revisar flashcards 10 min no transporte</strong></li>
+                    <li>📝 <strong>Escrever 3 coisas que aprendi hoje</strong> (antes de dormir)</li>
+                    <li>🏃 <strong>Caminhar 15 min</strong> (depois do almoço)</li>
+                    <li>🧘 <strong>Meditar 5 min</strong> (logo ao acordar)</li>
+                </ul>
+            </div>
+            """, unsafe_allow_html=True)
+    
+    # Footer
+    st.markdown("---")
+    st.markdown("""
+    <div style="text-align: center; color: #42A5F5; font-style: italic;">
+        💙 StudyFlow Pro - Transformando procrastinação em conquistas diárias
+        <br>🧠 "A diferença entre o ordinário e o extraordinário é a prática deliberada"
+        <br>🔒 Seus dados ficam salvos permanentemente no Supabase
+        <br>🔑 Sistema de código pessoal - acesse de qualquer dispositivo!
+    </div>
+    """, unsafe_allow_html=True)
+
+if __name__ == "__main__":
     main()
